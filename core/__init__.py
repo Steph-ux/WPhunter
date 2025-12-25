@@ -1,0 +1,1 @@
+# WPHunter Core Module
