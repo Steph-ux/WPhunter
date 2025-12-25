@@ -104,7 +104,7 @@ class LFIPayloads:
         "..%252f",       # Double URL encoded
         "..%c0%af",      # UTF-8 overlong
         "....//",        # Doubled
-        "....\/",        # Mixed slashes
+        r"....\/",       # Mixed slashes
         "..\\",          # Windows
         "..%5c",         # URL encoded backslash
         "..//..//",      # Double slash

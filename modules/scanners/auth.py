@@ -198,37 +198,40 @@ class AuthScanner:
                 continue
     
     def _is_admin_content(self, html: str) -> bool:
-        """Robust detection of admin panel content."""
-        admin_markers = [
-            # Reliable markers
-            'id="wpbody-content"',
-            'id="wpadminbar"',
-            'class="wp-admin"',
-            '<body class="wp-admin',
-            'dashicons.min.css',
-            'wp-admin/admin-ajax.php',
-            # Menu items
-            'id="adminmenu"',
-            'class="wp-menu-name"',
-            # JavaScript admin
-            'wp.i18n.setLocaleData',
+        """
+        Strict detection of WordPress admin panel content.
+        
+        Reduces false positives by requiring WordPress-specific admin elements.
+        """
+        # CRITICAL CHECK 1: WordPress admin body class
+        if '<body class="wp-admin' not in html:
+            return False
+        
+        # CRITICAL CHECK 2: Admin menu (only in real admin panel)
+        if 'id="adminmenu"' not in html:
+            return False
+        
+        # CRITICAL CHECK 3: Admin-specific JavaScript
+        admin_js_markers = [
+            'wp-admin/js/common.min.js',
+            'wp-admin/js/admin-bar.min.js',
             'wpApiSettings',
-            # Common admin text
-            'Dashboard',
-            'Posts',
-            'Media',
-            'Pages',
-            'Comments',
-            'Appearance',
-            'Plugins',
-            'Users',
-            'Tools',
-            'Settings',
         ]
         
-        # Need at least 3 markers to avoid false positives
-        matches = sum(1 for marker in admin_markers if marker in html)
-        return matches >= 3
+        if not any(marker in html for marker in admin_js_markers):
+            return False
+        
+        # ADDITIONAL VERIFICATION: Admin-specific elements
+        admin_elements = [
+            'id="wpbody-content"',
+            'id="wpadminbar"',
+            'class="wp-menu-name"',
+        ]
+        
+        element_matches = sum(1 for elem in admin_elements if elem in html)
+        
+        # Require at least 2 additional admin elements
+        return element_matches >= 2
     
     def _extract_evidence(self, html: str) -> str:
         """Extract evidence from HTML."""

