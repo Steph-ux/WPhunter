@@ -45,14 +45,16 @@ class WPHunter:
     async def run_recon(self):
         """Run reconnaissance modules."""
         # WAF Detection (first to adjust scan parameters)
-        waf_detector = WAFDetector(self.http)
-        wafs = await waf_detector.detect()
-        self.results["recon"]["waf"] = waf_detector.get_summary()
+        waf_info = await WAFDetector.detect(self.http, stealth=True)
+        self.results["recon"]["waf"] = waf_info.to_dict()
         
         # Adjust scan based on WAF
-        if waf_detector.is_protected:
-            recommendations = waf_detector.get_scan_recommendations()
-            logger.warning(f"WAF detected - adjusting scan (delay: {recommendations['delay']}s)")
+        if waf_info.detected:
+            logger.warning(f"WAF detected: {waf_info.waf_name}")
+            # Reduce aggressiveness
+            self.config.rate_limit.requests_per_second = min(
+                self.config.rate_limit.requests_per_second, 5
+            )
         
         # Version detection
         version_detector = VersionDetector(self.http)
