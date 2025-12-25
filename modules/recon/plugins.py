@@ -26,10 +26,9 @@ from bs4 import BeautifulSoup
 
 from core.http_client import WPHttpClient, HTTPResponse
 from core.logger import logger
-from core.security import (
-    GlobalRateLimiter, WAFDetector, WPScanAPI,
-    PluginVulnTester, NulledPluginDetector, get_rate_limiter
-)
+from core.security import get_rate_limiter
+from modules.scanners.waf import WAFDetector
+from modules.integrations.wpscan_api import WPScanAPI
 
 
 @dataclass
