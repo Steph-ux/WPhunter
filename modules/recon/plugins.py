@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from bs4 import BeautifulSoup
+from packaging import version
 
 from core.http_client import WPHttpClient, HTTPResponse
 from core.logger import logger
