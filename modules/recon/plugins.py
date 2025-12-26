@@ -30,6 +30,7 @@ from core.logger import logger
 from core.security import get_rate_limiter
 from modules.scanners.waf import WAFDetector
 from modules.integrations.wpscan_api import WPScanAPI
+from modules.recon.plugin_security import PluginVulnTester, NulledPluginDetector
 
 
 @dataclass
@@ -117,18 +118,17 @@ class VulnerabilityChecker:
     
     @staticmethod
     def _is_version_vulnerable(current: str, fixed: str) -> bool:
-        """Check if current version is older than fixed version."""
+        """
+        Check if current version is older than fixed version.
+        
+        Uses packaging.version for proper semver comparison.
+        Handles versions like 1.0.0-beta, 2.1-rc1, etc.
+        """
         try:
-            current_parts = [int(x) for x in current.split('.')[:3]]
-            fixed_parts = [int(x) for x in fixed.split('.')[:3]]
-            # Pad with zeros
-            while len(current_parts) < 3:
-                current_parts.append(0)
-            while len(fixed_parts) < 3:
-                fixed_parts.append(0)
-            return current_parts < fixed_parts
-        except ValueError:
-            return False
+            return version.parse(current) < version.parse(fixed)
+        except version.InvalidVersion:
+            logger.debug(f"Invalid version format: {current} or {fixed}")
+            return False  # Conservative: assume not vulnerable if can't parse
 
 
 class PluginEnumerator:
@@ -618,7 +618,9 @@ class PluginEnumerator:
             pass
     
     async def _detect_from_error_logs(self):
-        """Detect plugins from PHP error logs."""
+        """Detect plugins from PHP error logs (with size limit to prevent DoS)."""
+        MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB max
+        
         error_log_paths = [
             "/wp-content/debug.log",
             "/debug.log",
@@ -627,6 +629,20 @@ class PluginEnumerator:
         
         for path in error_log_paths:
             try:
+                # Check size first with HEAD request
+                head_response = await self.http.head(path)
+                
+                if not head_response.ok:
+                    continue
+                
+                # Check content-length header
+                size = int(head_response.headers.get('content-length', 0))
+                
+                if size > MAX_LOG_SIZE:
+                    logger.warning(f"Debug log too large ({size} bytes, max {MAX_LOG_SIZE}): {path}")
+                    continue
+                
+                # Now safe to download
                 response = await self.http.get(path)
                 
                 if response.ok and "PHP" in response.text:
@@ -645,7 +661,8 @@ class PluginEnumerator:
                             )
                     
                     break  # Found one, stop checking
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Error checking {path}: {e}")
                 continue
     
     async def _detect_from_translations(self):
