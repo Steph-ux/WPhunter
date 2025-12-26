@@ -213,7 +213,17 @@ class WPScanAPI:
                 
                 if response.status_code == 200:
                     data = response.json()
-                    vulns = self._parse_vulnerabilities(data, slug, version)
+                    # WPScan API for themes returns { "theme-slug": { "vulnerabilities": [...] } }
+                    # or just { "vulnerabilities": [...] } if the slug is the key
+                    if slug in data:
+                        vulns_data = data[slug].get("vulnerabilities", [])
+                        vulns = self._parse_vulnerabilities(
+                            {"vulnerabilities": vulns_data},
+                            slug,
+                            version
+                        )
+                    else:
+                        vulns = self._parse_vulnerabilities(data, slug, version)
                     
                     self.cache[cache_key] = {
                         "timestamp": time.time(),
@@ -241,30 +251,44 @@ class WPScanAPI:
     async def check_wordpress(self, wp_version: str) -> List[Vulnerability]:
         """Check WordPress core for known vulnerabilities."""
         if not self.api_token:
-            raise ValueError("WPScan API token required")
+            logger.warning("WPScan API token not configured")
+            return []
+        
+        # WPScan API expects version without dots: 5.4.2 → 542
+        version_normalized = wp_version.replace(".", "")
         
         # Check cache
         cache_key = f"wordpress:{wp_version}"
         if cache_key in self.cache:
             cached = self.cache[cache_key]
             if time.time() - cached["timestamp"] < self.cache_ttl:
-                logger.debug(f"Cache hit: WordPress {wp_version}")
                 return cached["vulnerabilities"]
         
         await self._rate_limit()
         
         try:
             async with httpx.AsyncClient() as client:
-                # CORRECT API format: /wordpresses/{version} (NOT with dots removed)
+                # Correct API format: /wordpresses/542
                 response = await client.get(
-                    f"{self.BASE_URL}/wordpresses/{wp_version}",
+                    f"{self.BASE_URL}/wordpresses/{version_normalized}",
                     headers=self.headers,
                     timeout=10
                 )
                 
                 if response.status_code == 200:
                     data = response.json()
-                    vulns = self._parse_vulnerabilities(data, f"wordpress-{wp_version}", None)
+                    
+                    # API returns: {"542": {"vulnerabilities": [...]}}
+                    if version_normalized in data:
+                        vulns_data = data[version_normalized].get("vulnerabilities", [])
+                        vulns = self._parse_vulnerabilities(
+                            {"vulnerabilities": vulns_data},
+                            f"wordpress-{wp_version}",
+                            None
+                        )
+                    else:
+                        # Fallback to direct parsing
+                        vulns = self._parse_vulnerabilities(data, f"wordpress-{wp_version}", None)
                     
                     self.cache[cache_key] = {
                         "timestamp": time.time(),
