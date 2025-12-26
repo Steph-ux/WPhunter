@@ -156,11 +156,11 @@ class WPScanAPI:
                 
                 elif response.status_code == 401:
                     logger.error("WPScan API: Invalid token")
-                    raise AuthenticationError("Invalid API token")
+                    return []  # Don't crash, just return empty
                 
                 elif response.status_code == 403:
-                    logger.error("WPScan API: Access forbidden")
-                    raise PermissionError("API access forbidden")
+                    logger.warning("WPScan API: Access forbidden (check token or rate limit)")
+                    return []  # Don't crash, continue scan without API data
                 
                 elif response.status_code == 404:
                     logger.debug(f"Plugin not in WPScan DB: {slug}")
