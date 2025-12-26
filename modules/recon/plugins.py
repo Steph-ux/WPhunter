@@ -374,25 +374,57 @@ class PluginEnumerator:
         return report
 
     async def _passive_detect(self):
-        """Passively detect plugins from HTML content."""
-        try:
-            response = await self.http.get("/")
-            
-            if not response.ok:
-                return
-            
-            pattern = r'/wp-content/plugins/([a-zA-Z0-9_-]+)/'
-            matches = re.findall(pattern, response.text)
-            
-            for slug in set(matches):
-                if slug not in self.detected_plugins:
-                    self.detected_plugins[slug] = PluginInfo(
-                        slug=slug,
-                        path=f"/wp-content/plugins/{slug}/",
-                        detection_method="passive"
-                    )
-        except Exception as e:
-            logger.debug(f"Passive detection failed: {e}")
+        """
+        Enhanced passive plugin detection.
+        
+        Scans multiple pages to find plugins that may only load on specific pages.
+        """
+        # Pages to scan for plugin references
+        pages_to_scan = [
+            "/",
+            "/wp-login.php",
+            "/wp-admin/",
+            "/?p=1",  # First post
+            "/sample-page/",
+            "/feed/",
+            "/wp-json/",
+        ]
+        
+        all_matches = set()
+        
+        for page in pages_to_scan:
+            try:
+                response = await self.http.get(page)
+                
+                if not response.ok:
+                    continue
+                
+                # Pattern 1: Standard plugin paths
+                matches = re.findall(r'/wp-content/plugins/([a-zA-Z0-9_-]+)/', response.text)
+                all_matches.update(matches)
+                
+                # Pattern 2: Inline scripts and quotes
+                script_matches = re.findall(r'["\']/wp-content/plugins/([a-zA-Z0-9_-]+)', response.text)
+                all_matches.update(script_matches)
+                
+                # Pattern 3: Plugin version comments
+                version_matches = re.findall(r'wp-content/plugins/([a-zA-Z0-9_-]+)/.*?ver=', response.text)
+                all_matches.update(version_matches)
+                
+            except Exception as e:
+                logger.debug(f"Error scanning {page}: {e}")
+                continue
+        
+        # Add detected plugins
+        for slug in all_matches:
+            if slug not in self.detected_plugins:
+                self.detected_plugins[slug] = PluginInfo(
+                    slug=slug,
+                    path=f"/wp-content/plugins/{slug}/",
+                    detection_method="passive"
+                )
+        
+        logger.info(f"Passive detection found {len(all_matches)} plugins")
     
     async def _active_enumerate(self):
         """Actively check for known plugins."""

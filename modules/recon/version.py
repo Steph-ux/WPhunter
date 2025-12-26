@@ -149,20 +149,48 @@ class VersionDetector:
         return None
     
     async def _detect_from_json_api(self) -> Optional[str]:
-        """Detect from REST API /wp-json/ response."""
+        """
+        Detect WordPress version from REST API.
+        
+        Uses multiple methods:
+        1. oEmbed endpoint (most reliable)
+        2. Generator field in responses
+        3. Namespace analysis
+        """
         try:
-            response = await self.http.get("/wp-json/")
+            # Method 1: oEmbed endpoint (most reliable)
+            oembed_url = f"/wp-json/oembed/1.0/embed?url={self.http.base_url}"
+            response = await self.http.get(oembed_url)
+            
             if response.ok and response.is_json:
                 data = response.json()
-                # Check for version in various locations
                 if "version" in data:
                     return str(data["version"])
-                # Also in namespaces info
-                if "namespaces" in data and "wp/v2" in data.get("namespaces", []):
-                    # API available, try detailed endpoint
+            
+            # Method 2: Root endpoint with generator
+            response = await self.http.get("/wp-json/")
+            
+            if response.ok and response.is_json:
+                data = response.json()
+                
+                # Check for generator in routes
+                routes = data.get("routes", {})
+                for route_info in routes.values():
+                    if isinstance(route_info, dict):
+                        # Some routes expose version info
+                        if "version" in route_info:
+                            return str(route_info["version"])
+                
+                # Method 3: Infer from namespaces (less precise)
+                namespaces = data.get("namespaces", [])
+                if "wp/v2" in namespaces:
+                    # wp/v2 introduced in WP 4.7
+                    # Can't get exact version, but know it's 4.7+
                     pass
-        except Exception:
-            pass
+        
+        except Exception as e:
+            logger.debug(f"JSON API detection failed: {e}")
+        
         return None
     
     async def _detect_from_meta(self) -> Optional[str]:
