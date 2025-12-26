@@ -111,6 +111,7 @@ class WPHttpClient:
         self.client_kwargs = {
             "timeout": httpx.Timeout(config.timeout),
             "follow_redirects": True,
+            "max_redirects": 5,  # Prevent infinite redirect loops
             "verify": config.verify_ssl,
         }
         
@@ -119,7 +120,10 @@ class WPHttpClient:
             self.client_kwargs["proxies"] = config.get_proxy_dict()
             logger.info(f"Proxy enabled: {config.proxy.http}")
         
-        # Session cookies
+        # ✅ FIX: Create persistent client for cookie management
+        self.client = httpx.AsyncClient(**self.client_kwargs)
+        
+        # Session cookies (managed by persistent client)
         self.cookies: Dict[str, str] = {}
         
         # Request counter for stats
@@ -191,18 +195,18 @@ class WPHttpClient:
             try:
                 start_time = time.monotonic()
                 
-                async with httpx.AsyncClient(**self.client_kwargs) as client:
-                    response = await client.request(
-                        method=method.upper(),
-                        url=url,
-                        params=params,
-                        data=data,
-                        json=json_data,
-                        headers=request_headers,
-                        cookies=request_cookies,
-                        follow_redirects=allow_redirects,
-                        timeout=self.config.timeout
-                    )
+                # ✅ FIX: Use persistent client instead of creating new one
+                response = await self.client.request(
+                    method=method.upper(),
+                    url=url,
+                    params=params,
+                    data=data,
+                    json=json_data,
+                    headers=request_headers,
+                    cookies=request_cookies,
+                    follow_redirects=allow_redirects,
+                    timeout=self.config.timeout
+                )
                 
                 # Track timing
                 elapsed = time.monotonic() - start_time
@@ -318,3 +322,68 @@ class WPHttpClient:
         """Set authentication cookies (WordPress login)."""
         self.cookies.update(cookies)
         logger.info(f"Set {len(cookies)} auth cookies")
+    
+    async def upload(
+        self,
+        path: str,
+        files: Dict[str, tuple],
+        data: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> HTTPResponse:
+        """
+        Upload files via multipart/form-data.
+        
+        Args:
+            path: URL path
+            files: Dict of {field_name: (filename, content, mime_type)}
+            data: Additional form data
+            
+        Returns:
+            HTTPResponse wrapper
+        """
+        url = self._build_url(path)
+        request_headers = self._get_headers(kwargs.get('headers'))
+        
+        # Merge cookies
+        request_cookies = {**self.cookies}
+        if kwargs.get('cookies'):
+            request_cookies.update(kwargs['cookies'])
+        
+        # Rate limiting
+        await self.rate_limiter.acquire()
+        
+        try:
+            start_time = time.monotonic()
+            
+            response = await self.client.post(
+                url=url,
+                files=files,
+                data=data,
+                headers=request_headers,
+                cookies=request_cookies,
+                timeout=self.config.timeout
+            )
+            
+            elapsed = time.monotonic() - start_time
+            self.request_count += 1
+            
+            # Update session cookies
+            for cookie_name, cookie_value in response.cookies.items():
+                self.cookies[cookie_name] = cookie_value
+            
+            return HTTPResponse(
+                url=str(response.url),
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                text=response.text,
+                elapsed=elapsed,
+            )
+            
+        except Exception as e:
+            self.error_count += 1
+            raise
+    
+    async def close(self):
+        """Close the persistent HTTP client."""
+        await self.client.aclose()
+

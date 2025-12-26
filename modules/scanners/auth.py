@@ -25,6 +25,7 @@ CWE-306: Missing Authentication
 import asyncio
 import base64
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -165,7 +166,18 @@ class AuthScanner:
         """Check if protected endpoints are accessible without auth."""
         logger.info("Testing protected endpoint access...")
         
+        # ✅ FIX FP #12: Whitelist public admin pages
+        PUBLIC_ADMIN_PAGES = [
+            "/wp-admin/customize.php",  # Theme customizer (public)
+            "/wp-admin/admin-ajax.php",  # AJAX endpoint (public)
+        ]
+        
         for endpoint, name in self.PROTECTED_ENDPOINTS:
+            # Skip whitelisted public pages
+            if endpoint in PUBLIC_ADMIN_PAGES:
+                logger.debug(f"Skipping public admin page: {endpoint}")
+                continue
+                
             await self.rate_limiter.acquire()
             
             try:
@@ -597,15 +609,17 @@ class AuthScanner:
         try:
             # Get initial cookies
             response1 = await self.http.get("/")
-            cookies_before = response1.cookies
             
+            # ✅ FIX: Access cookies correctly from httpx Response
             # Check if session cookies have secure flags
-            for cookie in cookies_before:
-                if "wordpress" in cookie.name.lower():
-                    if not cookie.secure:
-                        logger.warning(f"Cookie {cookie.name} missing Secure flag")
-                    if not cookie.has_nonstandard_attr("HttpOnly"):
-                        logger.warning(f"Cookie {cookie.name} missing HttpOnly flag")
+            for cookie_name, cookie_value in response1.headers.get_list("set-cookie"):
+                if "wordpress" in cookie_name.lower():
+                    # Check for Secure flag
+                    if "Secure" not in cookie_value:
+                        logger.warning(f"Cookie {cookie_name} missing Secure flag")
+                    # Check for HttpOnly flag
+                    if "HttpOnly" not in cookie_value:
+                        logger.warning(f"Cookie {cookie_name} missing HttpOnly flag")
                         
         except Exception as e:
             logger.debug(f"Session test error: {e}")

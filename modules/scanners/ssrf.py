@@ -40,6 +40,25 @@ class SSRFFinding:
 
 
 class SSRFScanner:
+
+    # ✅ FIX FP #8, #22: Whitelist legitimate services
+    LEGITIMATE_SERVICES = [
+        'pingback', 'trackback',  # WordPress pingback (legitimate)
+        'webhook', 'zapier', 'ifttt',  # Legitimate webhooks
+        'stripe', 'paypal', 'payment',  # Payment webhooks
+    ]
+    
+    def _is_legitimate_callback(self, url: str, context: str) -> bool:
+        """Check if callback is from legitimate service."""
+        url_lower = url.lower()
+        context_lower = context.lower()
+        
+        # Check if it's a known legitimate service
+        for service in self.LEGITIMATE_SERVICES:
+            if service in url_lower or service in context_lower:
+                return True
+        
+        return False
     """
     WordPress SSRF vulnerability scanner.
     

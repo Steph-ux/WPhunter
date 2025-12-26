@@ -20,6 +20,7 @@ CWE-352: Cross-Site Request Forgery
 
 import asyncio
 import re
+import html
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 from urllib.parse import urljoin, urlparse
@@ -170,14 +171,21 @@ class CSRFScanner:
     def _detect_any_csrf_protection(self, form: Dict, html: str) -> bool:
         """Detect ANY form of CSRF protection."""
         
+        # ✅ FIX FP #16: Detect CAPTCHA
+        if 'g-recaptcha' in html or 'h-captcha' in html or 'captcha' in html.lower():
+            logger.debug("CAPTCHA detected - considering form protected")
+            return True
+        
         # 1. WordPress nonce
         if self._has_wordpress_nonce(form):
             return True
         
-        # 2. Generic CSRF tokens
+        # 2. Generic CSRF tokens (✅ FIX FP #11: Extended list)
         csrf_fields = [
             "csrf_token", "csrf", "_csrf", "token", "_token",
-            "authenticity_token", "xsrf_token", "_xsrf"
+            "authenticity_token", "xsrf_token", "_xsrf",
+            "security", "_security", "nonce", "_nonce",  # Custom tokens
+            "form_token", "request_token", "anti_csrf"
         ]
         
         inputs = form.get("inputs", [])
@@ -507,8 +515,8 @@ class CSRFScanner:
                 continue
     
     def _generate_csrf_poc(self, finding: CSRFFinding, form: Dict) -> str:
-        """Generate CSRF PoC HTML."""
-        action = finding.url
+        """Generate CSRF PoC HTML with proper escaping."""
+        action = html.escape(finding.url)  # ✅ FIX Bug #7: Escape HTML
         method = finding.method
         
         if method == "GET":
@@ -529,8 +537,8 @@ window.location = "{action}?confirm=yes";
         else:  # POST
             inputs_html = ""
             for inp in form.get("inputs", []):
-                name = inp.get("name", "")
-                value = inp.get("value", "")
+                name = html.escape(inp.get("name", ""))  # ✅ Escape
+                value = html.escape(inp.get("value", ""))  # ✅ Escape
                 if name:
                     inputs_html += f'    <input type="hidden" name="{name}" value="{value}" />\n'
             

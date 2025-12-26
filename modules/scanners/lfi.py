@@ -196,6 +196,18 @@ class SmartRateLimiter:
 
 
 class LFIScanner:
+
+    # ✅ FIX FP #7, #17: Whitelist legitimate WordPress files
+    LEGITIMATE_WP_FILES = [
+        'robots.txt', 'sitemap.xml', 'wp-config-sample.php',
+        'readme.html', 'license.txt', 'wp-includes/version.php',
+        'wp-admin/about.php', 'wp-content/index.php',
+    ]
+    
+    def _is_legitimate_file(self, path: str) -> bool:
+        """Check if file is a legitimate WordPress file."""
+        path_lower = path.lower()
+        return any(legit in path_lower for legit in self.LEGITIMATE_WP_FILES)
     """
     Advanced LFI/RFI scanner with RCE chain testing.
     

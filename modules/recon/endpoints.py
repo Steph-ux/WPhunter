@@ -552,18 +552,26 @@ class EndpointMapper:
             logger.debug(f"Detailed v2 mapping failed: {e}")
     
     async def _bruteforce_ajax_actions(self):
-        """Bruteforce common AJAX action names - FIXED."""
+        """Bruteforce common AJAX action names with improved baseline."""
         logger.info("Bruteforcing AJAX actions...")
         
-        # Baseline: test with a non-existent action
-        baseline_response = await self.http.post(
-            "/wp-admin/admin-ajax.php",
-            data={"action": "nonexistent_action_xyz123"}
-        )
-        baseline_text = baseline_response.text.strip()
+        # ✅ FIX Bug #12: Multiple baseline requests to handle dynamic responses
+        import random
+        baselines = []
+        for i in range(3):
+            baseline_response = await self.http.post(
+                "/wp-admin/admin-ajax.php",
+                data={"action": f"nonexistent_action_{random.randint(1000, 9999)}"}
+            )
+            baselines.append(baseline_response.text.strip())
+            await asyncio.sleep(0.1)
+        
+        # Take most common response as baseline
+        from collections import Counter
+        baseline_text = Counter(baselines).most_common(1)[0][0]
         baseline_status = baseline_response.status_code
         
-        logger.debug(f"Baseline response: status={baseline_status}, body={baseline_text[:50]}")
+        logger.debug(f"Baseline response (from 3 samples): status={baseline_status}, body={baseline_text[:50]}")
         
         discovered = []
         

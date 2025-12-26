@@ -42,6 +42,7 @@ class SQLiFinding:
     evidence: str
     dbms: Optional[str] = None
     severity: str = "critical"
+    confidence: float = 1.0  # Confidence score (0-1)
     
     # CWE/OWASP mapping
     cwe: str = "CWE-89"
@@ -256,7 +257,7 @@ class SQLiScanner:
             await self._test_time_blind(url, param_name)
     
     async def _test_error_based(self, url: str, param_name: str) -> bool:
-        """Test for error-based SQL injection - FIXED."""
+        """Test for error-based SQL injection with false positive reduction."""
         for payload in self.PAYLOADS["error_based"][:6]:
             test_url = self._inject_param(url, param_name, f"1{payload}")
             
@@ -266,21 +267,49 @@ class SQLiScanner:
                 # ✅ Test EVEN if status 500 (SQL errors often return 500!)
                 # Don't skip on error status codes
                 
-                # Check for SQL errors (even in 500 responses)
-                dbms, error = self._detect_sql_error(response.text)
+                # ✅ FIX Bug #11: Check Content-Type before processing
+                if response.is_json:
+                    # JSON responses are less likely to contain SQL errors in HTML
+                    try:
+                        json_data = response.json()
+                        # Check for error in JSON
+                        if "error" in str(json_data).lower() and "sql" in str(json_data).lower():
+                            dbms, error, confidence = self._detect_sql_error(str(json_data), payload)
+                            if dbms and confidence > 0.7:
+                                finding = SQLiFinding(
+                                    url=url,
+                                    parameter=param_name,
+                                    payload=payload,
+                                    sqli_type=SQLiType.ERROR_BASED,
+                                    dbms=dbms,
+                                    evidence=error[:200],
+                                    confidence=confidence,
+                                    severity="critical"
+                                )
+                                self.findings.append(finding)
+                                logger.vuln("critical", f"SQL Injection ({dbms}) in {param_name} (confidence: {confidence:.0%})")
+                                return True
+                    except:
+                        pass
                 
-                if dbms:
+                # Check for SQL errors in HTML/text responses
+                dbms, error, confidence = self._detect_sql_error(response.text, payload)
+                
+                # ✅ Only report if confidence is high enough
+                if dbms and confidence >= 0.7:
                     finding = SQLiFinding(
                         url=url,
                         parameter=param_name,
                         payload=payload,
-                        technique="error_based",
+                        sqli_type=SQLiType.ERROR_BASED,
                         dbms=dbms,
                         evidence=error[:200],
-                        severity="critical"
+                        confidence=confidence,
+                        severity="critical" if confidence > 0.9 else "high"
                     )
                     self.findings.append(finding)
-                    logger.vuln("critical", f"SQL Injection ({dbms}) in {param_name}")
+                    logger.vuln("critical" if confidence > 0.9 else "high", 
+                               f"SQL Injection ({dbms}) in {param_name} (confidence: {confidence:.0%})")
                     return True
                         
             except Exception as e:
@@ -465,20 +494,43 @@ class SQLiScanner:
                 except Exception:
                     continue
     
-    def _detect_sql_error(self, content: str) -> Tuple[Optional[str], str]:
+    def _detect_sql_error(self, content: str, payload: str = "") -> Tuple[Optional[str], str, float]:
         """
-        Detect SQL error messages in response content.
+        Detect SQL error messages in response content with confidence scoring.
+        
+        Args:
+            content: Response content to check
+            payload: The SQL injection payload used
         
         Returns:
-            Tuple of (database type, error message) or (None, "")
+            Tuple of (database type, error message, confidence) or (None, "", 0.0)
         """
         for dbms, patterns in self.SQL_ERRORS.items():
             for pattern in patterns:
                 match = re.search(pattern, content, re.IGNORECASE)
                 if match:
-                    return dbms, match.group(0)
+                    error_msg = match.group(0)
+                    
+                    # ✅ FIX FP #18: Calculate confidence based on context
+                    confidence = 1.0
+                    
+                    # Reduce confidence if payload not near error
+                    if payload:
+                        error_pos = match.start()
+                        context = content[max(0, error_pos-300):min(len(content), error_pos+300)]
+                        
+                        # Check if payload appears in context
+                        payload_clean = payload.strip("'\"")
+                        if payload_clean and payload_clean[:10] not in context:
+                            confidence *= 0.5  # Reduce confidence
+                    
+                    # ✅ FIX FP #14: Check for SEO-friendly URLs (quotes in paths)
+                    if "'" in content[:200] and "seo" in content.lower()[:500]:
+                        confidence *= 0.6  # Likely SEO, not SQLi
+                    
+                    return dbms, error_msg, confidence
         
-        return None, ""
+        return None, "", 0.0
     
     def _inject_param(self, url: str, param_name: str, value: str) -> str:
         """

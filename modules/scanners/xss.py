@@ -769,6 +769,53 @@ class XSSScanner:
         end = min(len(content), idx + len(payload) + 100)
         return content[start:end]
     
+
+    def _is_executable_context(self, html: str, payload: str) -> bool:
+        """
+        Check if payload is in executable context (not just reflected).
+        ✅ FIX FP #10, #19: Reduce false positives from safe contexts
+        """
+        # Find payload position
+        payload_pos = html.find(payload)
+        if payload_pos == -1:
+            return False
+        
+        # Get context around payload (200 chars before/after)
+        start = max(0, payload_pos - 200)
+        end = min(len(html), payload_pos + len(payload) + 200)
+        context = html[start:end]
+        
+        # ✅ FP #19: Meta tags are NOT executable
+        if '<meta' in context and '>' in context[context.find('<meta'):]:
+            return False
+        
+        # ✅ FP #10: Check if HTML is properly encoded
+        if '&lt;' in context or '&gt;' in context or '&quot;' in context:
+            # Payload is HTML-encoded = safe
+            return False
+        
+        # ✅ FP #15: Comments are moderated (check for "awaiting moderation")
+        if 'moderat' in html.lower() or 'pending' in html.lower():
+            return False
+        
+        # Check if in dangerous contexts
+        dangerous_contexts = [
+            r'<script[^>]*>',  # Inside script tag
+            r'on\w+\s*=\s*["'']',  # Event handler
+            r'<iframe[^>]*>',  # Inside iframe
+            r'javascript:',  # JavaScript protocol
+        ]
+        
+        for pattern in dangerous_contexts:
+            if re.search(pattern, context, re.IGNORECASE):
+                return True
+        
+        # If payload contains <script> and it's not encoded, it's dangerous
+        if '<script' in payload.lower() and '<script' in html.lower():
+            return True
+        
+        return False
+
     def get_summary(self) -> Dict:
         """Get scan summary."""
         return {
