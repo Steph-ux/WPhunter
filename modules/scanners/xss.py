@@ -250,45 +250,75 @@ class XSSScanner:
         test_blind: bool = False
     ) -> List[XSSFinding]:
         """
-        Run comprehensive XSS scan.
+        Run comprehensive XSS scan - FIXED VERSION.
         
         Args:
-            urls: URLs to test
+            urls: URLs to test (will be enriched with discovered URLs)
             test_stored: Test for stored XSS
             test_dom: Test for DOM XSS
             test_blind: Test for blind XSS (requires callback server)
         """
         logger.section("XSS Scanner")
         
-        # Discover URLs if not provided
-        if not urls:
-            urls = await self._discover_urls()
+        # Always discover URLs to enrich the list
+        discovered_urls = await self._discover_urls()
+        
+        # Merge with provided URLs
+        if urls:
+            all_urls = list(set(urls + discovered_urls))
+            logger.info(f"Testing {len(urls)} provided + {len(discovered_urls)} discovered = {len(all_urls)} total URLs")
+        else:
+            all_urls = discovered_urls
+            logger.info(f"Testing {len(all_urls)} discovered URLs")
+        
+        if not all_urls:
+            logger.error("No URLs to test! Scanner cannot proceed.")
+            return self.findings
         
         # Test reflected XSS
-        for url in urls[:30]:  # Limit
+        logger.info(f"Starting Reflected XSS tests on {len(all_urls[:30])} URLs...")
+        for i, url in enumerate(all_urls[:30], 1):  # Limit to 30
+            logger.info(f"[{i}/{min(len(all_urls), 30)}] Testing: {url[:80]}...")
             await self._test_reflected_xss(url)
+        
+        logger.info(f"Reflected XSS tests complete: {len(self.findings)} findings so far")
         
         # Test stored XSS
         if test_stored:
+            logger.info("Starting Stored XSS tests...")
             await self._test_stored_xss()
         
         # Test DOM XSS
         if test_dom:
-            await self._test_dom_xss(urls)
+            logger.info("Starting DOM XSS tests...")
+            await self._test_dom_xss(all_urls)
         
         # Test blind XSS
         if test_blind:
+            logger.info(f"Starting Blind XSS tests...")
             await self._test_blind_xss()
-        
-        logger.success(f"XSS scan complete: {len(self.findings)} findings")
+        logger.success(f"XSS scan complete: {len(self.findings)} total findings")
         return self.findings
     
     async def _test_reflected_xss(self, url: str):
-        """Test for reflected XSS."""
+        """
+        Test for reflected XSS - FIXED VERSION.
+        
+        Improvements:
+        - Debug logging to track progress
+        - Proper parameter parsing validation
+        - Better error handling
+        """
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
         
+        # Debug logging
+        logger.debug(f"Testing URL: {url}")
+        logger.debug(f"Parsed query: {parsed.query}")
+        logger.debug(f"Parameters found: {list(params.keys())}")
+        
         if not params:
+            logger.debug(f"No parameters found in {url}, skipping")
             return
         
         for param in params.keys():
@@ -297,13 +327,16 @@ class XSSScanner:
                 continue
             self.tested_params.add(param_key)
             
+            logger.info(f"Testing parameter: {param}")
+            
             # Detect context first with canary
             context = await self._detect_context(url, param)
+            logger.debug(f"Detected context: {context.value}")
             
             # Get context-specific payloads
             payloads = XSSPayloads.get_all(context)[:15]  # Limit to 15
             
-            for payload in payloads:
+            for i, payload in enumerate(payloads, 1):
                 await self.rate_limiter.acquire()
                 
                 # Build test URL
@@ -311,10 +344,15 @@ class XSSScanner:
                 test_params[param] = [payload]
                 test_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{urlencode(test_params, doseq=True)}"
                 
+                logger.debug(f"Testing payload {i}/{len(payloads)}: {payload[:40]}...")
+                
                 try:
                     response = await self.http.get(test_url, timeout=10)
                     
-                    if response.ok and self._is_xss_confirmed(response.text, payload, context):
+                    if not response.ok:
+                        continue
+                    
+                    if self._is_xss_confirmed(response.text, payload, context):
                         finding = XSSFinding(
                             url=url,
                             parameter=param,
@@ -325,15 +363,22 @@ class XSSScanner:
                             severity="high"
                         )
                         self.findings.append(finding)
-                        logger.vuln("high", f"Reflected XSS in {param}: {payload[:40]}...")
-                        return  # Stop after first finding
+                        logger.vuln("high", f"✓ Reflected XSS in {param}: {payload[:40]}...")
+                        return  # Stop after first finding for this parameter
                         
                 except Exception as e:
                     logger.debug(f"XSS test failed: {e}")
                     continue
     
     async def _detect_context(self, url: str, param: str) -> XSSContext:
-        """Detect injection context using canary."""
+        """
+        Detect injection context using canary - FIXED VERSION.
+        
+        Improvements:
+        - Check script tags with .string attribute
+        - Better attribute detection with regex
+        - More robust parsing
+        """
         canary = "XSSCANARY123"
         
         parsed = urlparse(url)
@@ -345,28 +390,41 @@ class XSSScanner:
             response = await self.http.get(test_url, timeout=10)
             
             if canary not in response.text:
-                return XSSContext.HTML_TEXT
+                logger.debug(f"Canary not reflected for {param}")
+                return XSSContext.HTML_TEXT  # Assume HTML context
             
-            # Find context
+            logger.debug(f"Canary reflected for {param}, analyzing context...")
+            
+            # Parse HTML
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Check if in script tag
-            scripts = soup.find_all('script')
-            for script in scripts:
-                if canary in str(script):
+            # Method 1: Check in script tags
+            for script in soup.find_all('script'):
+                script_text = script.string or ""
+                if canary in script_text:
+                    logger.debug(f"Context: JavaScript (found in <script>)")
                     return XSSContext.JAVASCRIPT
             
-            # Check if in attribute
+            # Method 2: Check in attributes
             for tag in soup.find_all(True):
                 for attr, value in tag.attrs.items():
                     if isinstance(value, str) and canary in value:
-                        if attr in ['href', 'src', 'action']:
+                        if attr in ['href', 'src', 'action', 'data']:
+                            logger.debug(f"Context: URL (found in {tag.name}.{attr})")
                             return XSSContext.URL
-                        return XSSContext.HTML_ATTR
+                        
+                        # Check if attribute is quoted in raw HTML
+                        attr_pattern = rf'{attr}\s*=\s*["\']?[^"\']*{re.escape(canary)}[^"\']*["\']?'
+                        if re.search(attr_pattern, response.text):
+                            logger.debug(f"Context: HTML_ATTR (found in {tag.name}.{attr})")
+                            return XSSContext.HTML_ATTR
             
+            # Method 3: Default to HTML text
+            logger.debug(f"Context: HTML_TEXT (default)")
             return XSSContext.HTML_TEXT
             
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Context detection failed: {e}, assuming HTML_TEXT")
             return XSSContext.HTML_TEXT
     
     def _is_xss_confirmed(self, content: str, payload: str, context: XSSContext) -> bool:

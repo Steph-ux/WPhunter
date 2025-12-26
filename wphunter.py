@@ -107,9 +107,18 @@ class WPHunter:
                     "type": "Known CVE", **v.to_dict(), "severity": v.severity
                 })
         
-        # XSS Scanner
+        # XSS Scanner - Let it discover URLs automatically
+        logger.info("Starting XSS Scanner...")
         xss = XSSScanner(self.http)
-        xss_results = await xss.scan(urls, forms)
+        xss_results = await xss.scan(
+            urls=None,  # Let scanner discover URLs automatically
+            test_stored=True,
+            test_dom=True,
+            test_blind=False  # Requires callback URL
+        )
+        
+        logger.info(f"XSS Scanner found {len(xss_results)} vulnerabilities")
+        
         for f in xss_results:
             self.results["findings"].append(f.to_dict())
         
