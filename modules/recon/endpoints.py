@@ -552,8 +552,18 @@ class EndpointMapper:
             logger.debug(f"Detailed v2 mapping failed: {e}")
     
     async def _bruteforce_ajax_actions(self):
-        """Bruteforce common AJAX action names."""
+        """Bruteforce common AJAX action names - FIXED."""
         logger.info("Bruteforcing AJAX actions...")
+        
+        # Baseline: test with a non-existent action
+        baseline_response = await self.http.post(
+            "/wp-admin/admin-ajax.php",
+            data={"action": "nonexistent_action_xyz123"}
+        )
+        baseline_text = baseline_response.text.strip()
+        baseline_status = baseline_response.status_code
+        
+        logger.debug(f"Baseline response: status={baseline_status}, body={baseline_text[:50]}")
         
         discovered = []
         
@@ -564,20 +574,35 @@ class EndpointMapper:
                     data={"action": action}
                 )
                 
-                # Check for valid response (not just "0" or "-1")
-                if response.ok and response.text.strip() not in ["0", "-1", ""]:
-                    logger.warning(f"Discovered AJAX action: {action}")
+                response_text = response.text.strip()
+                
+                # Action exists IF:
+                # 1. Response different from baseline
+                # 2. OR contains JSON
+                # 3. OR contains specific error messages
+                
+                action_exists = False
+                
+                if response_text != baseline_text:
+                    action_exists = True
+                elif response_text.startswith('{') or response_text.startswith('['):
+                    action_exists = True  # JSON response
+                elif any(keyword in response_text.lower() for keyword in 
+                        ['nonce', 'permission', 'login', 'required', 'error']):
+                    action_exists = True  # Error message = action exists
+                
+                if action_exists:
+                    logger.warning(f"Discovered AJAX action: {action} (response: {response_text[:100]})")
                     
-                    # Test without nonce
                     self.endpoints.ajax_actions.append(AJAXAction(
                         action=action,
                         found_in="bruteforce",
-                        vulnerable=True
+                        vulnerable=(response_text not in ["0", "-1"])
                     ))
                     discovered.append(action)
                 
-                await asyncio.sleep(0.05)  # Rate limiting
-                
+                await asyncio.sleep(0.1)  # Rate limiting
+                    
             except Exception:
                 continue
         

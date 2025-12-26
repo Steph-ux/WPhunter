@@ -185,9 +185,9 @@ class WPHttpClient:
         # Rate limiting
         await self.rate_limiter.acquire()
         
-        # Retry logic with exponential backoff
+        # Retry logic with exponential backoff - FIXED
         last_error = None
-        for attempt in range(self.config.max_retries + 1):
+        for attempt in range(self.config.max_retries):  # 0, 1, 2 = 3 attempts if max_retries=3
             try:
                 start_time = time.monotonic()
                 
@@ -201,8 +201,10 @@ class WPHttpClient:
                         headers=request_headers,
                         cookies=request_cookies,
                         follow_redirects=allow_redirects,
+                        timeout=self.config.timeout
                     )
                 
+                # Track timing
                 elapsed = time.monotonic() - start_time
                 self.request_count += 1
                 
@@ -221,20 +223,33 @@ class WPHttpClient:
             except httpx.TimeoutException as e:
                 last_error = e
                 self.error_count += 1
-                logger.warning(f"Timeout on {url} (attempt {attempt + 1}/{self.config.max_retries + 1})")
+                
+                # Last attempt?
+                if attempt == self.config.max_retries - 1:
+                    break  # Don't sleep after last failure
+                
+                logger.warning(f"Timeout on {url} (attempt {attempt + 1}/{self.config.max_retries})")
+                
+                # Exponential backoff
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                await asyncio.sleep(wait_time)
                 
             except httpx.RequestError as e:
                 last_error = e
                 self.error_count += 1
-                logger.warning(f"Request error on {url}: {e} (attempt {attempt + 1}/{self.config.max_retries + 1})")
-            
-            # Exponential backoff
-            if attempt < self.config.max_retries:
+                
+                # Last attempt?
+                if attempt == self.config.max_retries - 1:
+                    break  # Don't sleep after last failure
+                
+                logger.warning(f"Request error on {url}: {e} (attempt {attempt + 1}/{self.config.max_retries})")
+                
+                # Exponential backoff
                 wait_time = (2 ** attempt) + random.uniform(0, 1)
                 await asyncio.sleep(wait_time)
         
         # All retries failed
-        raise httpx.RequestError(f"Failed after {self.config.max_retries + 1} attempts: {last_error}")
+        raise httpx.RequestError(f"Failed after {self.config.max_retries} attempts: {last_error}")
     
     async def get(self, path: str, **kwargs) -> HTTPResponse:
         """HTTP GET request."""
