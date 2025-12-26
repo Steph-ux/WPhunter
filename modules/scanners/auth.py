@@ -199,39 +199,26 @@ class AuthScanner:
     
     def _is_admin_content(self, html: str) -> bool:
         """
-        Strict detection of WordPress admin panel content.
+        Strict detection of WordPress admin panel content - FIXED.
         
-        Reduces false positives by requiring WordPress-specific admin elements.
+        Improvements:
+        - Flexible regex for wp-admin class (handles quotes, order)
+        - Check both single and double quotes for adminmenu
         """
-        # CRITICAL CHECK 1: WordPress admin body class
-        if '<body class="wp-admin' not in html:
+        # CRITICAL CHECK 1: WordPress admin body class (flexible regex)
+        if not re.search(r'<body[^>]*class=[\"\'][^\"\']*wp-admin', html, re.IGNORECASE):
             return False
         
-        # CRITICAL CHECK 2: Admin menu (only in real admin panel)
-        if 'id="adminmenu"' not in html:
+        # CRITICAL CHECK 2: Admin menu (both quote styles)
+        if 'id="adminmenu"' not in html and 'id=\'adminmenu\'' not in html:
             return False
         
-        # CRITICAL CHECK 3: Admin-specific JavaScript
-        admin_js_markers = [
-            'wp-admin/js/common.min.js',
-            'wp-admin/js/admin-bar.min.js',
-            'wpApiSettings',
-        ]
-        
-        if not any(marker in html for marker in admin_js_markers):
+        # CRITICAL CHECK 3: WordPress version in footer
+        if 'wp-admin/images/wordpress-logo' not in html:
             return False
         
-        # ADDITIONAL VERIFICATION: Admin-specific elements
-        admin_elements = [
-            'id="wpbody-content"',
-            'id="wpadminbar"',
-            'class="wp-menu-name"',
-        ]
-        
-        element_matches = sum(1 for elem in admin_elements if elem in html)
-        
-        # Require at least 2 additional admin elements
-        return element_matches >= 2
+        # All checks passed
+        return True
     
     def _extract_evidence(self, html: str) -> str:
         """Extract evidence from HTML."""

@@ -509,27 +509,40 @@ class UploadScanner:
                 continue
     
     def _extract_uploaded_url(self, response_text: str) -> Optional[str]:
-        """Extract uploaded file URL from response."""
-        # Common patterns
+        """Extract uploaded file URL from response - FIXED."""
+        import html
+        
+        # Decode HTML entities first
+        response_text = html.unescape(response_text)
+        
         patterns = [
-            r'"url":"([^"]+)"',
-            r'"file":"([^"]+)"',
-            r'"location":"([^"]+)"',
-            r'href="([^"]+\.(php|jpg|png|gif|svg))"',
-            r'src="([^"]+\.(php|jpg|png|gif|svg))"',
+            r'"url"\s*:\s*"([^"]+)"',
+            r'"file"\s*:\s*"([^"]+)"',
+            r'"location"\s*:\s*"([^"]+)"',
+            r'href=["\'"]([^"\']+\.(php|jpg|png|gif|svg))["\']',
+            r'src=["\'"]([^"\']+\.(php|jpg|png|gif|svg))["\']',
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, response_text)
+            match = re.search(pattern, response_text, re.IGNORECASE)
             if match:
                 url = match.group(1)
-                # Make absolute
+                
+                # Already a complete URL
+                if url.startswith('http://') or url.startswith('https://'):
+                    return url
+                
+                # Absolute URL (starts with /)
                 if url.startswith('/'):
                     return url
-                elif url.startswith('http'):
-                    return url
-                else:
-                    return f"/wp-content/uploads/{url}"
+                
+                # Relative URL - check if it already contains wp-content
+                if 'wp-content' in url:
+                    # Avoid duplicate: /wp-content/uploads/wp-content/...
+                    return f"/{url.lstrip('/')}"
+                
+                # Simple relative URL
+                return f"/wp-content/uploads/{url}"
         
         return None
     

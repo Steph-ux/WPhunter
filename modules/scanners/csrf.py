@@ -226,8 +226,9 @@ class CSRFScanner:
                 logger.debug(f"Nonce field '{nonce_field['name']}' is empty or too short")
                 return False
             
-            # Verify WordPress format (10 chars alphanumeric)
-            if not re.match(r'^[a-f0-9]{10}$', value):
+            # Verify WordPress format (10 chars alphanumeric lowercase)
+            # WordPress nonces are [a-z0-9], NOT just [a-f0-9]
+            if not re.match(r'^[a-z0-9]{10}$', value):
                 logger.debug(f"Nonce value doesn't match WordPress format: {value}")
                 return False
             

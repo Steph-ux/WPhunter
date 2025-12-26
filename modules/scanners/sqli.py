@@ -256,21 +256,17 @@ class SQLiScanner:
             await self._test_time_blind(url, param_name)
     
     async def _test_error_based(self, url: str, param_name: str) -> bool:
-        """
-        Test for error-based SQL injection.
-        
-        Looks for SQL error messages in response.
-        """
-        for payload in self.PAYLOADS["error_based"][:6]:  # Limit payloads
+        """Test for error-based SQL injection - FIXED."""
+        for payload in self.PAYLOADS["error_based"][:6]:
             test_url = self._inject_param(url, param_name, f"1{payload}")
             
             try:
                 response = await self.http.get(test_url)
                 
-                if not response.ok:
-                    continue
+                # ✅ Test EVEN if status 500 (SQL errors often return 500!)
+                # Don't skip on error status codes
                 
-                # Check for SQL errors
+                # Check for SQL errors (even in 500 responses)
                 dbms, error = self._detect_sql_error(response.text)
                 
                 if dbms:
@@ -278,14 +274,15 @@ class SQLiScanner:
                         url=url,
                         parameter=param_name,
                         payload=payload,
-                        sqli_type=SQLiType.ERROR_BASED,
-                        evidence=error,
+                        technique="error_based",
                         dbms=dbms,
+                        evidence=error[:200],
+                        severity="critical"
                     )
                     self.findings.append(finding)
                     logger.vuln("critical", f"SQL Injection ({dbms}) in {param_name}")
                     return True
-                    
+                        
             except Exception as e:
                 logger.debug(f"Error-based test failed: {e}")
         
