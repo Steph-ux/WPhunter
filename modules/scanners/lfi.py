@@ -576,16 +576,42 @@ class LFIScanner:
         """Robust validation to eliminate false positives."""
         text_only = re.sub(r'<[^>]+>', '', content)
         
-        # /etc/passwd validation
+        # /etc/passwd validation - ENHANCED
         if signature == "root:":
+            # ✅ FIX: Cloudflare IPs (172.x.x.x) false positives
             if not re.search(r'root:.*?:0:0:', text_only):
                 return False
-            user_lines = re.findall(r'\w+:x?:\d+:\d+:', text_only)
-            if len(user_lines) < 3:
+            
+            # Count valid user entries (exclude IPs)
+            valid_entries = 0
+            user_lines = re.findall(r'(\w+):x?:(\d+):(\d+):', text_only)
+            
+            for username, uid, gid in user_lines:
+                uid_int = int(uid)
+                
+                # Skip if looks like IP address
+                if re.match(r'^\d{1,3}$', username):  # Numeric username = likely IP
+                    continue
+                
+                # Skip Cloudflare/RFC1918 IPs (172.x, 192.168.x, 10.x)
+                if username.startswith(('172', '192', '10', '127')):
+                    continue
+                
+                # Valid system users
+                if username in ['root', 'daemon', 'bin', 'sys', 'sync', 'games', 
+                               'man', 'lp', 'mail', 'news', 'uucp', 'proxy', 
+                               'www-data', 'backup', 'list', 'irc', 'nobody']:
+                    valid_entries += 1
+            
+            # Require at least 5 valid system users
+            if valid_entries < 5:
                 return False
-            false_positives = ["example.com", "tutorial", "demo"]
+            
+            # Check for common false positive patterns
+            false_positives = ["example.com", "tutorial", "demo", "cloudflare", "cdn"]
             if any(fp in content.lower() for fp in false_positives):
                 return False
+            
             return True
         
         # wp-config.php validation

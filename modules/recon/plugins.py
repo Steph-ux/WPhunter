@@ -196,7 +196,7 @@ class PluginEnumerator:
                 vuln_count += 1
         
         plugins = list(self.detected_plugins.values())
-        logger.success(f"Total plugins: {len(plugins)} ({vuln_count} vulnerable)")
+        logger.success(f"Total plugins: {len(plugins)}")
         
         return plugins
     

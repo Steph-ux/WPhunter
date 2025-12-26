@@ -112,6 +112,18 @@ class UploadScanner:
         self.rate_limiter = get_rate_limiter()
         self.tested_endpoints: Set[str] = set()
         self.uploaded_files: List[str] = []  # Track for cleanup
+        self.uploaded_files_ids: List[int] = []  # Track IDs for reliable cleanup
+    
+    def _extract_media_id(self, response_text: str) -> Optional[int]:
+        """Extract media ID from JSON response."""
+        try:
+            import json
+            data = json.loads(response_text)
+            if isinstance(data, dict) and "id" in data:
+                return int(data["id"])
+        except Exception:
+            pass
+        return None
     
     async def scan(self, forms: List[Dict] = None) -> List[UploadFinding]:
         """Run comprehensive file upload scan."""
@@ -198,6 +210,11 @@ class UploadScanner:
                 # Extract uploaded URL
                 uploaded_url = self._extract_uploaded_url(response.text)
                 
+                # Capture Media ID for cleanup
+                media_id = self._extract_media_id(response.text)
+                if media_id:
+                    self.uploaded_files_ids.append(media_id)
+                
                 if uploaded_url:
                     self.uploaded_files.append(uploaded_url)
                     
@@ -257,6 +274,11 @@ class UploadScanner:
                 if response.ok:
                     uploaded_url = self._extract_uploaded_url(response.text)
                     
+                    # Capture Media ID
+                    media_id = self._extract_media_id(response.text)
+                    if media_id:
+                        self.uploaded_files_ids.append(media_id)
+                    
                     if uploaded_url:
                         self.uploaded_files.append(uploaded_url)
                         
@@ -301,6 +323,11 @@ class UploadScanner:
                 if response.ok:
                     uploaded_url = self._extract_uploaded_url(response.text)
                     
+                    # Capture Media ID
+                    media_id = self._extract_media_id(response.text)
+                    if media_id:
+                        self.uploaded_files_ids.append(media_id)
+                    
                     if uploaded_url:
                         self.uploaded_files.append(uploaded_url)
                         
@@ -344,6 +371,11 @@ class UploadScanner:
                 if response.ok:
                     uploaded_url = self._extract_uploaded_url(response.text)
                     
+                    # Capture Media ID
+                    media_id = self._extract_media_id(response.text)
+                    if media_id:
+                        self.uploaded_files_ids.append(media_id)
+                    
                     if uploaded_url:
                         self.uploaded_files.append(uploaded_url)
                         
@@ -383,6 +415,11 @@ class UploadScanner:
                 response = await self.http.upload(endpoint, files=files)
                 
                 if response.ok:
+                    # Capture Media ID
+                    media_id = self._extract_media_id(response.text)
+                    if media_id:
+                        self.uploaded_files_ids.append(media_id)
+
                     # Try to access in different locations
                     potential_paths = [
                         "/wp-content/shell.php",
@@ -427,6 +464,11 @@ class UploadScanner:
                 
                 if response2.ok:
                     uploaded_url = self._extract_uploaded_url(response2.text)
+                    
+                    # Capture Media ID
+                    media_id = self._extract_media_id(response2.text)
+                    if media_id:
+                        self.uploaded_files_ids.append(media_id)
                     
                     if uploaded_url:
                         self.uploaded_files.append(uploaded_url)
@@ -480,6 +522,11 @@ class UploadScanner:
             
             if response.ok:
                 uploaded_url = self._extract_uploaded_url(response.text)
+                
+                # Capture Media ID
+                media_id = self._extract_media_id(response.text)
+                if media_id:
+                    self.uploaded_files_ids.append(media_id)
                 
                 if uploaded_url:
                     self.uploaded_files.append(uploaded_url)
@@ -595,36 +642,46 @@ class UploadScanner:
         return False
     
     async def _cleanup_uploaded_files(self):
-        """Attempt to clean up uploaded test files."""
-        if not self.uploaded_files:
-            return
+        """
+        Attempt to clean up uploaded test files.
+        ✅ FIX Bug #5: Use captured Media IDs for reliable deletion
+        """
+        # 1. Cleanup by Media ID (Reliable)
+        if self.uploaded_files_ids:
+            logger.info(f"Cleaning up {len(self.uploaded_files_ids)} uploaded files via API...")
             
-        logger.info(f"Cleaning up {len(self.uploaded_files)} uploaded files...")
-        
-        for file_url in self.uploaded_files:
-            try:
-                # ✅ FIX: Extract media ID from URL or try to find it
-                # Method 1: Try to extract ID from URL pattern
-                # /wp-content/uploads/2024/12/shell-123.php
-                import re
-                match = re.search(r'/wp-content/uploads/.*?([0-9]+)', file_url)
-                
-                if match:
-                    media_id = match.group(1)
-                    # Try to delete via REST API
+            for media_id in self.uploaded_files_ids:
+                try:
                     delete_response = await self.http.delete(
                         f"/wp-json/wp/v2/media/{media_id}?force=true"
                     )
-                    if delete_response.ok:
-                        logger.info(f"Deleted uploaded file: {file_url}")
-                    else:
-                        logger.debug(f"Could not delete {file_url} via REST API")
-                else:
-                    # Method 2: Try direct DELETE request (won't work but try anyway)
-                    logger.debug(f"Could not extract media ID from {file_url}, skipping cleanup")
                     
-            except Exception as e:
-                logger.debug(f"Cleanup failed for {file_url}: {e}")
+                    if delete_response.ok:
+                        logger.debug(f"Deleted media ID {media_id}")
+                    else:
+                        logger.debug(f"Failed to delete media ID {media_id}: {delete_response.status_code}")
+                except Exception as e:
+                    logger.debug(f"Cleanup error for ID {media_id}: {e}")
+        
+        # 2. Cleanup by URL (Fallback for files where ID capture failed)
+        if self.uploaded_files:
+            logger.debug("Running fallback cleanup for remaining files...")
+            
+            for file_url in self.uploaded_files:
+                try:
+                    # Try to extract ID from URL regex as last resort
+                    import re
+                    match = re.search(r'/wp-content/uploads/.*?([0-9]+)', file_url)
+                    
+                    if match:
+                        media_id = match.group(1)
+                        # Avoid double deletion if we already tracked this ID
+                        if int(media_id) in self.uploaded_files_ids:
+                            continue
+                            
+                        await self.http.delete(f"/wp-json/wp/v2/media/{media_id}?force=true")
+                except Exception:
+                    pass
     
     def get_summary(self) -> Dict:
         """Get comprehensive summary."""

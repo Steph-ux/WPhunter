@@ -318,10 +318,9 @@ class WPScanAPI:
         vulns = []
         
         try:
-            # API can return multiple formats:
-            # 1. {slug: {vulnerabilities: [...]}}
-            # 2. {version_number: {vulnerabilities: [...]}}  ← WordPress core
-            # 3. {vulnerabilities: [...]}
+            if not isinstance(data, dict):
+                logger.debug(f"Invalid data format for {component}: {type(data)}")
+                return []
             
             component_data = None
             
@@ -335,18 +334,21 @@ class WPScanAPI:
                     component_data = data[normalized]
             # Method 3: Single key (if only one entry)
             elif len(data) == 1:
-                component_data = list(data.values())[0]
+                vals = list(data.values())
+                if vals:
+                    component_data = vals[0]
             # Method 4: Direct vulnerabilities key
             elif "vulnerabilities" in data:
                 component_data = data
-            else:
-                logger.debug(f"No vulnerability data for {component}")
+            
+            if not isinstance(component_data, dict):
+                logger.debug(f"No valid vulnerability data for {component}")
                 return []
             
             raw_vulns = component_data.get("vulnerabilities", [])
             
             if not isinstance(raw_vulns, list):
-                logger.error(f"Invalid vulnerabilities format: {type(raw_vulns)}")
+                # logger.error(f"Invalid vulnerabilities format: {type(raw_vulns)}")
                 return []
             
             for vuln in raw_vulns:
@@ -354,8 +356,7 @@ class WPScanAPI:
                     continue
                 
                 # Validation of required fields
-                if "id" not in vuln or "title" not in vuln:
-                    logger.debug("Skipping invalid vulnerability entry")
+                if not vuln.get("id") or not vuln.get("title"):
                     continue
                 
                 # Filter by version
@@ -364,8 +365,8 @@ class WPScanAPI:
                     try:
                         if self._compare_versions(comp_version, fixed_in) >= 0:
                             continue  # Already fixed
-                    except Exception as e:
-                        logger.debug(f"Version comparison failed: {e}")
+                    except Exception:
+                        pass
                 
                 # Parse CVSS
                 cvss = None
@@ -378,29 +379,42 @@ class WPScanAPI:
                 # Determine severity
                 severity = self._cvss_to_severity(cvss)
                 
-                # Extract references
-                references = self._extract_references(vuln)
+                # Extract references (Safely)
+                references = []
+                try:
+                    raw_refs = vuln.get("references")
+                    if isinstance(raw_refs, dict):
+                        url_refs = raw_refs.get("url", [])
+                        if isinstance(url_refs, list):
+                            references = [u for u in url_refs if isinstance(u, str) and u.startswith("http")]
+                except Exception:
+                    pass
                 
                 # Check exploit availability
-                exploit_available = self._check_exploit_indicators(vuln)
+                exploit_available = False
+                try:
+                    exploit_available = self._check_exploit_indicators(vuln)
+                except Exception:
+                    pass
                 
                 # Check if requires authentication
-                requires_auth = "authenticated" in vuln.get("title", "").lower()
+                title = vuln.get("title") or ""
+                requires_auth = "authenticated" in title.lower()
                 
                 # Create vulnerability object
                 vulnerability = Vulnerability(
                     id=str(vuln.get("id", "")),
-                    title=vuln.get("title", "Unknown Vulnerability"),
-                    description=vuln.get("description", "")[:500],  # Truncate
+                    title=title or "Unknown",
+                    description=(vuln.get("description") or "")[:500],
                     vuln_type=vuln.get("vuln_type", "unknown"),
                     severity=severity,
                     cvss_score=cvss,
                     cve=vuln.get("cve"),
-                    references=references,
+                    references=references[:3],
                     fixed_in=fixed_in,
                     exploit_available=exploit_available,
                     requires_auth=requires_auth,
-                    exploitable=True  # Assume exploitable unless proven otherwise
+                    exploitable=True
                 )
                 
                 vulns.append(vulnerability)
@@ -408,7 +422,7 @@ class WPScanAPI:
             return vulns
         
         except Exception as e:
-            logger.error(f"Error parsing vulnerabilities: {e}")
+            # logger.error(f"Error parsing vulnerabilities: {e}")
             return []
     
     def _compare_versions(self, v1: str, v2: str) -> int:
@@ -482,7 +496,7 @@ class WPScanAPI:
                 return True
         
         # Check title/description
-        text = (vuln.get("title", "") + " " + vuln.get("description", "")).lower()
+        text = ((vuln.get("title") or "") + " " + (vuln.get("description") or "")).lower()
         if any(word in text for word in ["exploit", "poc", "metasploit"]):
             return True
         
