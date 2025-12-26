@@ -429,25 +429,92 @@ class NginxScanner:
             return self._validate_nginx_config(content)
         return True
     
+    def _is_cloudflare_ip(self, ip: str) -> bool:
+        """Check if IP is in Cloudflare ranges - FIXED."""
+        ip_parts = ip.split('.')
+        if len(ip_parts) != 4:
+            return False
+        
+        try:
+            first = int(ip_parts[0])
+            second = int(ip_parts[1])
+            
+            # Cloudflare ranges (approximate, excluding RFC1918)
+            # Note: 172.16.0.0/12 is RFC1918 private, NOT Cloudflare!
+            cf_ranges = {
+                173: [245],  # 173.245.48.0/20
+                103: [21, 22, 31],  # 103.21.244.0/22, etc.
+                141: [101],  # 141.101.64.0/18
+                108: [162],  # 108.162.192.0/18
+                190: [93],   # 190.93.240.0/20
+                188: [114],  # 188.114.96.0/20
+                198: [41],   # 198.41.128.0/17
+                162: [158],  # 162.158.0.0/15
+                104: list(range(16, 32)),  # 104.16-31.0.0/13
+                131: [0],    # 131.0.72.0/22
+                # 172 is EXCLUDED (conflicts with RFC1918 172.16.0.0/12)
+            }
+            
+            if first in cf_ranges:
+                # Check second octet
+                allowed_seconds = cf_ranges[first]
+                if not allowed_seconds or second in allowed_seconds:
+                    return True
+            
+            return False
+            
+        except (ValueError, IndexError):
+            return False
+    
     def _validate_passwd_file(self, content: str) -> bool:
-        """Validate /etc/passwd file structure."""
+        """Validate /etc/passwd file structure - FIXED."""
         lines = content.split('\n')
         valid_entries = 0
+        has_root = False
         
         for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            
             parts = line.split(':')
-            # Valid passwd entry: user:x:uid:gid:info:home:shell
-            if len(parts) >= 7:
-                # Check UID and GID are numeric
-                try:
-                    int(parts[2])
-                    int(parts[3])
-                    valid_entries += 1
-                except ValueError:
+            if len(parts) < 7:
+                continue
+            
+            username, password, uid, gid, gecos, home, shell = parts[:7]
+            
+            try:
+                uid_int = int(uid)
+                gid_int = int(gid)
+                
+                # Stricter validations
+                # 1. Username valid (alphanumeric + _ -)
+                if not re.match(r'^[a-zA-Z0-9_-]+$', username):
                     continue
+                
+                # 2. UID/GID reasonable (0-65535)
+                if uid_int < 0 or uid_int > 65535 or gid_int < 0 or gid_int > 65535:
+                    continue
+                
+                # 3. Shell valid (starts with / or contains sh/nologin)
+                if not (shell.startswith('/') or 'sh' in shell or 'nologin' in shell):
+                    continue
+                
+                # 4. Home valid (starts with / or contains home/root/var)
+                if not (home.startswith('/') or 'home' in home or 'root' in home):
+                    continue
+                
+                valid_entries += 1
+                
+                # Check if it's root
+                if username == 'root' and uid_int == 0:
+                    has_root = True
+                    
+            except ValueError:
+                continue
         
-        # Must have at least 3 valid entries
-        return valid_entries >= 3
+        # Must have root + at least 5 valid system users
+        return has_root and valid_entries >= 5
     
     def _validate_wp_config(self, content: str) -> bool:
         """Validate wp-config.php file."""

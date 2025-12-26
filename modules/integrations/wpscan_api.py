@@ -314,16 +314,29 @@ class WPScanAPI:
         component: str,
         comp_version: Optional[str]
     ) -> List[Vulnerability]:
-        """Parse WPScan API response with robust validation."""
+        """Parse WPScan API response - FIXED."""
         vulns = []
         
         try:
-            # WPScan API can return multiple formats
-            # Format 1: {slug: {vulnerabilities: [...]}}
-            # Format 2: {vulnerabilities: [...]}
+            # API can return multiple formats:
+            # 1. {slug: {vulnerabilities: [...]}}
+            # 2. {version_number: {vulnerabilities: [...]}}  ← WordPress core
+            # 3. {vulnerabilities: [...]}
             
+            component_data = None
+            
+            # Method 1: Exact key match
             if component in data:
                 component_data = data[component]
+            # Method 2: Normalized version (for WordPress core)
+            elif comp_version:
+                normalized = comp_version.replace(".", "")
+                if normalized in data:
+                    component_data = data[normalized]
+            # Method 3: Single key (if only one entry)
+            elif len(data) == 1:
+                component_data = list(data.values())[0]
+            # Method 4: Direct vulnerabilities key
             elif "vulnerabilities" in data:
                 component_data = data
             else:
