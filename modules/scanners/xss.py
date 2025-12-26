@@ -598,26 +598,108 @@ class XSSScanner:
             try:
                 data = {target["param"]: payload}
                 await self.http.post(target["endpoint"], data=data)
-                logger.info(f"Blind XSS payload sent to {target['endpoint']}")
             except Exception:
                 pass
     
     async def _discover_urls(self) -> List[str]:
-        """Discover URLs to test."""
-        urls = []
+        """
+        Discover URLs to test - FIXED VERSION.
+        
+        Discovers ALL links with parameters, not just those with full domain.
+        """
+        from urllib.parse import urljoin, urlparse, urlencode
+        
+        urls = set()
         
         try:
-            response = await self.http.get("/")
-            soup = BeautifulSoup(response.text, 'html.parser')
+            # Scan multiple pages to maximize discovery
+            pages_to_scan = [
+                "/",
+                "/blog/",
+                "/?s=test",  # Search
+                "/?p=1",     # Post
+                "/category/news/",
+                "/page/2/",
+            ]
             
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                if '?' in href and self.http.base_url in href:
-                    urls.append(href)
-        except Exception:
-            pass
+            for page in pages_to_scan[:3]:  # Limit to avoid too many requests
+                try:
+                    response = await self.http.get(page, timeout=10)
+                    
+                    if not response.ok:
+                        continue
+                    
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    for link in soup.find_all('a', href=True):
+                        href = link['href']
+                        
+                        # Convert relative links to absolute
+                        absolute_url = urljoin(self.http.base_url, href)
+                        
+                        # Check if same domain
+                        if not self._is_same_domain(absolute_url, self.http.base_url):
+                            continue
+                        
+                        # Check if URL has parameters
+                        parsed = urlparse(absolute_url)
+                        if parsed.query:  # Has parameters
+                            urls.add(absolute_url)
+                    
+                    # Also look in forms
+                    for form in soup.find_all('form'):
+                        action = form.get('action', '')
+                        method = form.get('method', 'GET').upper()
+                        
+                        if method == 'GET':
+                            # GET forms generate URLs with parameters
+                            action_url = urljoin(self.http.base_url, action)
+                            
+                            # Build test URL with inputs
+                            inputs = form.find_all('input')
+                            if inputs:
+                                test_params = {}
+                                for inp in inputs:
+                                    name = inp.get('name')
+                                    if name and name not in ['_wpnonce', 'csrf']:
+                                        test_params[name] = 'test'
+                                
+                                if test_params:
+                                    test_url = f"{action_url}?{urlencode(test_params)}"
+                                    urls.add(test_url)
+                    
+                except Exception as e:
+                    logger.debug(f"Error scanning {page}: {e}")
+                    continue
+            
+            # If no URLs discovered, generate common WordPress test URLs
+            if not urls:
+                logger.warning("No URLs with parameters found, using common WordPress endpoints")
+                urls.update([
+                    f"{self.http.base_url}/?s=test",
+                    f"{self.http.base_url}/?p=1",
+                    f"{self.http.base_url}/?author=1",
+                    f"{self.http.base_url}/?cat=1",
+                    f"{self.http.base_url}/?tag=news",
+                ])
+            
+            logger.info(f"Discovered {len(urls)} URLs with parameters")
+            
+        except Exception as e:
+            logger.error(f"URL discovery failed: {e}")
+            # Fallback: common WordPress URLs
+            urls.update([
+                f"{self.http.base_url}/?s=test",
+                f"{self.http.base_url}/?p=1",
+            ])
         
-        return urls[:50]
+        return list(urls)[:50]  # Limit to 50 URLs
+    
+    def _is_same_domain(self, url1: str, url2: str) -> bool:
+        """Check if two URLs are on the same domain."""
+        domain1 = urlparse(url1).netloc
+        domain2 = urlparse(url2).netloc
+        return domain1 == domain2
     
     def _extract_evidence(self, content: str, payload: str) -> str:
         """Extract relevant evidence."""
